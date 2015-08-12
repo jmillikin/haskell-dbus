@@ -71,6 +71,7 @@ extra-source-files:
   examples/dbus-monitor.hs
   examples/export.hs
   examples/introspect.hs
+  examples/simple-introspection.hs
   examples/list-names.hs
   --
   tests/DBusTests.hs
@@ -112,6 +113,7 @@ library
     DBus
     DBus.Client
     DBus.Introspection
+    DBus.Introspection.Simple
     DBus.Socket
     DBus.Transport
 

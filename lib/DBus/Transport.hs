@@ -24,13 +24,13 @@ module DBus.Transport
 	  Transport(..)
 	, TransportOpen(..)
 	, TransportListen(..)
-	
+
 	-- * Transport errors
 	, TransportError
 	, transportError
 	, transportErrorMessage
 	, transportErrorAddress
-	
+
 	-- * Socket transport
 	, SocketTransport
 	, socketTransportOptionBacklog
@@ -69,15 +69,15 @@ class Transport t where
 	-- | Additional options that this transport type may use when establishing
 	-- a connection.
 	data TransportOptions t :: *
-	
+
 	-- | Default values for this transport's options.
 	transportDefaultOptions :: TransportOptions t
-	
+
 	-- | Send a 'ByteString' over the transport.
 	--
 	-- Throws a 'TransportError' if an error occurs.
 	transportPut :: t -> ByteString -> IO ()
-	
+
 	-- | Receive a 'ByteString' of the given size from the transport. The
 	-- transport should block until sufficient bytes are available, and
 	-- only return fewer than the requested amount if there will not be
@@ -85,7 +85,7 @@ class Transport t where
 	--
 	-- Throws a 'TransportError' if an error occurs.
 	transportGet :: t -> Int -> IO ByteString
-	
+
 	-- | Close an open transport, and release any associated resources
 	-- or handles.
 	transportClose :: t -> IO ()
@@ -103,26 +103,26 @@ class Transport t => TransportOpen t where
 class Transport t => TransportListen t where
 	-- | Used for transports that listen on a port or address.
 	data TransportListener t :: *
-	
+
 	-- | Begin listening for connections on the given address, using the
 	-- given options.
 	--
 	-- Throws a 'TransportError' if it's not possible to listen at that
 	-- address (for example, if the port is already in use).
 	transportListen :: TransportOptions t -> Address -> IO (TransportListener t)
-	
+
 	-- | Accept a new connection.
 	--
 	-- Throws a 'TransportError' if some error happens before the
 	-- transport is ready to exchange bytes.
 	transportAccept :: TransportListener t -> IO t
-	
+
 	-- | Close an open listener.
 	transportListenerClose :: TransportListener t -> IO ()
-	
+
 	-- | Get the address to use to connect to a listener.
 	transportListenerAddress :: TransportListener t -> Address
-	
+
 	-- | Get the UUID allocated to this transport listener.
 	--
 	-- See 'randomUUID'.
@@ -147,7 +147,7 @@ instance Transport SocketTransport where
 	transportDefaultOptions = SocketTransportOptions 30
 	transportPut (SocketTransport addr s) bytes = catchIOException addr (sendAll s bytes)
 	transportGet (SocketTransport addr s) n = catchIOException addr (recvLoop s n)
-	transportClose (SocketTransport addr s) = catchIOException addr (sClose s)
+	transportClose (SocketTransport addr s) = catchIOException addr (close s)
 
 recvLoop :: Socket -> Int -> IO ByteString
 recvLoop s = \n -> Lazy.toStrict `fmap` loop mempty n where
@@ -163,7 +163,7 @@ recvLoop s = \n -> Lazy.toStrict `fmap` loop mempty n where
 				-- Unexpected end of connection; maybe the remote end went away.
 				-- Return what we've got so far.
 				0 -> return (Builder.toLazyByteString acc)
-				
+
 				len -> do
 					let builder = mappend acc (Builder.byteString chunk)
 					if len == n
@@ -192,7 +192,7 @@ instance TransportListen SocketTransport where
 	transportAccept (SocketTransportListener a _ s) = catchIOException (Just a) $ do
 		(s', _) <- accept s
 		return (SocketTransport Nothing s')
-	transportListenerClose (SocketTransportListener a _ s) = catchIOException (Just a) (sClose s)
+	transportListenerClose (SocketTransportListener a _ s) = catchIOException (Just a) (close s)
 	transportListenerAddress (SocketTransportListener a _ _) = a
 	transportListenerUUID (SocketTransportListener _ uuid _) = uuid
 
@@ -206,25 +206,25 @@ openUnix :: Address -> IO SocketTransport
 openUnix transportAddr = go where
 	params = addressParameters transportAddr
 	param key = Map.lookup key params
-	
+
 	tooMany = "Only one of 'path' or 'abstract' may be specified for the\
 	          \ 'unix' transport."
 	tooFew = "One of 'path' or 'abstract' must be specified for the\
 	         \ 'unix' transport."
-	
+
 	path = case (param "path", param "abstract") of
 		(Just x, Nothing) -> Right x
 		(Nothing, Just x) -> Right ('\x00' : x)
 		(Nothing, Nothing) -> Left tooFew
 		_ -> Left tooMany
-	
+
 	go = case path of
 		Left err -> throwIO (transportError err)
 			{ transportErrorAddress = Just transportAddr
 			}
 		Right p -> catchIOException (Just transportAddr) $ bracketOnError
 			(socket AF_UNIX Stream defaultProtocol)
-			sClose
+			close
 			(\sock -> do
 				connect sock (SockAddrUnix p)
 				return (SocketTransport (Just transportAddr) sock))
@@ -239,7 +239,7 @@ openTcp :: Address -> IO SocketTransport
 openTcp transportAddr = go where
 	params = addressParameters transportAddr
 	param key = Map.lookup key params
-	
+
 	hostname = tcpHostname (param "host") getFamily
 	unknownFamily x = "Unknown socket family for TCP transport: " ++ show x
 	getFamily = case param "family" of
@@ -254,20 +254,20 @@ openTcp transportAddr = go where
 		Just x -> case readPortNumber x of
 			Just port -> Right port
 			Nothing -> Left (badPort x)
-	
+
 	getAddresses family_ = getAddrInfo (Just (defaultHints
 		{ addrFlags = [AI_ADDRCONFIG]
 		, addrFamily = family_
 		, addrSocketType = Stream
 		})) (Just hostname) Nothing
-	
+
 	openSocket [] = throwIO (transportError "openTcp: no addresses")
 		{ transportErrorAddress = Just transportAddr
 		}
 	openSocket (addr:addrs) = do
 		tried <- Control.Exception.try $ bracketOnError
 			(socket (addrFamily addr) (addrSocketType addr) (addrProtocol addr))
-			sClose
+			close
 			(\sock -> do
 				connect sock (addrAddress addr)
 				return sock)
@@ -278,7 +278,7 @@ openTcp transportAddr = go where
 					}
 				_ -> openSocket addrs
 			Right sock -> return sock
-	
+
 	go = case getPort of
 		Left err -> throwIO (transportError err)
 			{ transportErrorAddress = Just transportAddr
@@ -296,12 +296,12 @@ listenUnix :: UUID -> Address -> TransportOptions SocketTransport -> IO (Address
 listenUnix uuid origAddr opts = getPath >>= go where
 	params = addressParameters origAddr
 	param key = Map.lookup key params
-	
+
 	tooMany = "Only one of 'abstract', 'path', or 'tmpdir' may be\
 	          \ specified for the 'unix' transport."
 	tooFew = "One of 'abstract', 'path', or 'tmpdir' must be specified\
 	         \ for the 'unix' transport."
-	
+
 	getPath = case (param "abstract", param "path", param "tmpdir") of
 		(Just path, Nothing, Nothing) -> let
 			addr = address_ "unix"
@@ -317,27 +317,27 @@ listenUnix uuid origAddr opts = getPath >>= go where
 			in return (Right (addr, path))
 		(Nothing, Nothing, Just x) -> do
 			let fileName = x ++ "/haskell-dbus-" ++ formatUUID uuid
-			
+
 			-- Abstract paths are supported on Linux, but not on
 			-- other Unix-like systems.
 			let (addrParams, path) = if System.Info.os == "linux"
 				then ([("abstract", fileName)], '\x00' : fileName)
 				else ([("path", fileName)], fileName)
-			
+
 			let addr = address_ "unix" (addrParams ++ [("guid", formatUUID uuid)])
 			return (Right (addr, path))
 		(Nothing, Nothing, Nothing) -> return (Left tooFew)
 		_ -> return (Left tooMany)
-	
+
 	go path = case path of
 		Left err -> throwIO (transportError err)
 			{ transportErrorAddress = Just origAddr
 			}
 		Right (addr, p) -> catchIOException (Just origAddr) $ bracketOnError
 			(socket AF_UNIX Stream defaultProtocol)
-			sClose
+			close
 			(\sock -> do
-				bindSocket sock (SockAddrUnix p)
+				bind sock (SockAddrUnix p)
 				Network.Socket.listen sock (socketTransportOptionBacklog opts)
 				return (addr, sock))
 
@@ -345,37 +345,37 @@ listenTcp :: UUID -> Address -> TransportOptions SocketTransport -> IO (Address,
 listenTcp uuid origAddr opts = go where
 	params = addressParameters origAddr
 	param key = Map.lookup key params
-	
+
 	unknownFamily x = "Unknown socket family for TCP transport: " ++ show x
 	getFamily = case param "family" of
 		Just "ipv4" -> Right AF_INET
 		Just "ipv6" -> Right AF_INET6
 		Nothing     -> Right AF_UNSPEC
 		Just x      -> Left (unknownFamily x)
-	
+
 	badPort x = "Invalid socket port for TCP transport: " ++ show x
 	getPort = case param "port" of
 		Nothing -> Right 0
 		Just x -> case readPortNumber x of
 			Just port -> Right port
 			Nothing -> Left (badPort x)
-	
+
 	paramBind = case param "bind" of
 		Just "*" -> Nothing
 		Just x -> Just x
 		Nothing -> Just (tcpHostname (param "host") getFamily)
-	
+
 	getAddresses family_ = getAddrInfo (Just (defaultHints
 		{ addrFlags = [AI_ADDRCONFIG, AI_PASSIVE]
 		, addrFamily = family_
 		, addrSocketType = Stream
 		})) paramBind Nothing
-	
+
 	bindAddrs _ [] = throwIO (transportError "listenTcp: no addresses")
 		{ transportErrorAddress = Just origAddr
 		}
 	bindAddrs sock (addr:addrs) = do
-		tried <- Control.Exception.try (bindSocket sock (addrAddress addr))
+		tried <- Control.Exception.try (bind sock (addrAddress addr))
 		case tried of
 			Left err -> case addrs of
 				[] -> throwIO (transportError (show (err :: IOException)))
@@ -383,8 +383,8 @@ listenTcp uuid origAddr opts = go where
 					}
 				_ -> bindAddrs sock addrs
 			Right _ -> return ()
-	
-	sockAddr (PortNum port) = address_ "tcp" p where
+
+	sockAddr port = address_ "tcp" p where
 		p = baseParams ++ hostParam ++ familyParam
 		baseParams =
 			[ ("port", show port)
@@ -396,7 +396,7 @@ listenTcp uuid origAddr opts = go where
 		familyParam = case param "family" of
 			Just x -> [("family", x)]
 			Nothing -> []
-	
+
 	go = case getPort of
 		Left err -> throwIO (transportError err)
 			{ transportErrorAddress = Just origAddr
@@ -409,11 +409,11 @@ listenTcp uuid origAddr opts = go where
 				sockAddrs <- getAddresses family_
 				bracketOnError
 					(socket family_ Stream defaultProtocol)
-					sClose
+					close
 					(\sock -> do
 						setSocketOption sock ReuseAddr 1
 						bindAddrs sock (map (setPort port) sockAddrs)
-						
+
 						Network.Socket.listen sock (socketTransportOptionBacklog opts)
 						sockPort <- socketPort sock
 						return (sockAddr sockPort, sock))

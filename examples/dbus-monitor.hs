@@ -1,17 +1,17 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- Copyright (C) 2009-2011 John Millikin <john@john-millikin.com>
--- 
+--
 -- This program is free software: you can redistribute it and/or modify
 -- it under the terms of the GNU General Public License as published by
 -- the Free Software Foundation, either version 3 of the License, or
 -- any later version.
--- 
+--
 -- This program is distributed in the hope that it will be useful,
 -- but WITHOUT ANY WARRANTY; without even the implied warranty of
 -- MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 -- GNU General Public License for more details.
--- 
+--
 -- You should have received a copy of the GNU General Public License
 -- along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
@@ -51,17 +51,17 @@ usage name = "Usage: " ++ name ++ " [OPTION...]"
 findSocket :: [Option] -> IO Socket
 findSocket opts = getAddress opts >>= open where
 	session = do
-		got <- getSessionAddress
+		got <- getSessionAddresses
 		case got of
-			Just addr -> return addr
-			Nothing -> error "DBUS_SESSION_BUS_ADDRESS is not a valid address"
-	
+			(addr:_) -> return addr
+			[] -> error "DBUS_SESSION_BUS_ADDRESS is not a valid address"
+
 	system = do
 		got <- getSystemAddress
 		case got of
 			Just addr -> return addr
 			Nothing -> error "DBUS_SYSTEM_BUS_ADDRESS is not a valid address"
-	
+
 	getAddress [] = session
 	getAddress ((BusOption Session):_) = session
 	getAddress ((BusOption System):_) = system
@@ -92,15 +92,15 @@ main = do
 		hPutStrLn stderr (concat errors)
 		hPutStrLn stderr (usageInfo (usage name) optionInfo)
 		exitFailure
-	
+
 	sock <- findSocket options
-	
+
 	send sock (methodCall "/org/freedesktop/DBus" "org.freedesktop.DBus" "Hello")
 		{ methodCallDestination = Just "org.freedesktop.DBus"
 		} (\_ -> return ())
-	
+
 	mapM_ (addMatch sock) (if null userFilters then defaultFilters else userFilters)
-	
+
 	forever $ do
 		received <- receive sock
 		putStrLn (formatMessage received ++ "\n")
@@ -198,55 +198,55 @@ collapseTree d (Children xs)  = concatMap (collapseTree (d + 1)) xs
 -- Formatting for various kinds of variants, keyed to their signature type.
 formatVariant :: Variant -> StringTree
 formatVariant x = case variantType x of
-	
+
 	TypeBoolean -> Line $ let
 		Just x' = fromVariant x
 		in "boolean " ++ if x' then "true" else "false"
-	
+
 	TypeWord8 -> Line $ let
 		Just x' = fromVariant x
 		in "byte " ++ show (x' :: Word8)
-	
+
 	TypeWord16 -> Line $ let
 		Just x' = fromVariant x
 		in "uint16 " ++ show (x' :: Word16)
-	
+
 	TypeWord32 -> Line $ let
 		Just x' = fromVariant x
 		in "uint32 " ++ show (x' :: Word32)
-	
+
 	TypeWord64 -> Line $ let
 		Just x' = fromVariant x
 		in "uint64 " ++ show (x' :: Word64)
-	
+
 	TypeInt16 -> Line $ let
 		Just x' = fromVariant x
 		in "int16 " ++ show (x' :: Int16)
-	
+
 	TypeInt32 -> Line $ let
 		Just x' = fromVariant x
 		in "int32 " ++ show (x' :: Int32)
-	
+
 	TypeInt64 -> Line $ let
 		Just x' = fromVariant x
 		in "int64 " ++ show (x' :: Int64)
-	
+
 	TypeDouble -> Line $ let
 		Just x' = fromVariant x
 		in "double " ++ show (x' :: Double)
-	
+
 	TypeString -> Line $ let
 		Just x' = fromVariant x
 		in "string " ++ show (x' :: String)
-	
+
 	TypeObjectPath -> Line $ let
 		Just x' = fromVariant x
 		in "object path " ++ show (formatObjectPath x')
-	
+
 	TypeSignature -> Line $ let
 		Just x' = fromVariant x
 		in "signature " ++ show (formatSignature x')
-	
+
 	TypeArray _ -> MultiLine $ let
 		Just x' = fromVariant x
 		items = arrayItems x'
@@ -255,7 +255,7 @@ formatVariant x = case variantType x of
 		         , Line "]"
 		         ]
 		in lines'
-	
+
 	TypeDictionary _ _ -> MultiLine $ let
 		Just x' = fromVariant x
 		items = dictionaryItems x'
@@ -270,7 +270,7 @@ formatVariant x = case variantType x of
 			vTail = map Line (tail v')
 			firstLine = Line (k' ++ " -> " ++ vHead)
 		in lines'
-	
+
 	TypeStructure _ -> MultiLine $ let
 		Just x' = fromVariant x
 		items = structureItems x'
@@ -279,7 +279,7 @@ formatVariant x = case variantType x of
 		         , Line ")"
 		         ]
 		in lines'
-	
+
 	TypeVariant -> let
 		Just x' = fromVariant x
 		in MultiLine [Line "variant", Children [formatVariant x']]

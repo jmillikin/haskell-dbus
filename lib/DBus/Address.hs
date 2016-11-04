@@ -18,9 +18,11 @@ module DBus.Address where
 import qualified Control.Exception
 import           Data.Char (digitToInt, ord, chr)
 import           Data.List (intercalate)
+import           Data.Maybe (fromMaybe)
 import qualified Data.Map
 import           Data.Map (Map)
 import qualified System.Environment
+import           System.Posix (getSymbolicLinkStatus, getRealUserID, isSocket, fileOwner)
 import           Text.Printf (printf)
 
 import           Text.ParserCombinators.Parsec
@@ -75,7 +77,7 @@ formatAddress (Address method params) = concat [method, ":", csvParams] where
 		(k, v) <- Data.Map.toList params
 		let v' = concatMap escape v
 		return (concat [k, "=", v'])
-	
+
 	escape c = if elem c optionallyEncoded
 		then [c]
 		else printf "%%%02X" (ord c)
@@ -118,13 +120,13 @@ parsecAddress = p where
 		_ <- char ':'
 		params <- sepEndBy param (char ',')
 		return (Address method (Data.Map.fromList params))
-	
+
 	param = do
 		key <- many1 (noneOf "=;,")
 		_ <- char '='
 		value <- many1 valueChar
 		return (key, value)
-	
+
 	valueChar = encoded <|> unencoded
 	encoded = do
 		_ <- char '%'
@@ -144,6 +146,25 @@ getSystemAddress = do
 	env <- getenv "DBUS_SYSTEM_BUS_ADDRESS"
 	return (parseAddress (maybe system id env))
 
+-- | Returns the address of the user bus @$XDG_RUNTIME_DIR/bus@.
+--
+-- Returns 'Nothing' if the user bus doesn't exist, isn't a socket, or
+-- isn't owned by the current user.
+getUserAddress :: IO (Maybe Address)
+getUserAddress = do
+	env <- fmap (++ "/bus") <$> getenv "XDG_RUNTIME_DIR"
+	case env of
+	  Just busPath -> do
+	    ok <- isUsable busPath
+	    return $ if ok then Just (addr busPath) else Nothing
+	  Nothing -> return Nothing
+	where
+	  isUsable f = do
+	    st <- getSymbolicLinkStatus f
+	    uid <- getRealUserID
+	    return $ fileOwner st == uid && isSocket st
+	  addr p = Address "unix" (Data.Map.singleton "path" p)
+
 -- | Returns the address in the environment variable
 -- @DBUS_SESSION_BUS_ADDRESS@, which must be set.
 --
@@ -153,6 +174,16 @@ getSessionAddress :: IO (Maybe Address)
 getSessionAddress = do
 	env <- getenv "DBUS_SESSION_BUS_ADDRESS"
 	return (env >>= parseAddress)
+
+-- | Returns the addresses which can be used for connecting to the
+-- session bus. This includes the semicolon-delimited addresses in the
+-- environment variable @DBUS_SESSION_BUS_ADDRESS@, as well as the
+-- user bus socket from 'getUserAddress'.
+getSessionAddresses :: IO [Address]
+getSessionAddresses = do
+	env <- getenv "DBUS_SESSION_BUS_ADDRESS"
+	user <- getUserAddress
+	return $ fromMaybe [] (env >>= parseAddresses) ++ maybe [] (:[]) user
 
 -- | Returns the address in the environment variable
 -- @DBUS_STARTER_ADDRESS@, which must be set.

@@ -21,7 +21,7 @@ module DBus
 	(
 	-- * Messages
 	  Message
-	
+
 	-- ** Method calls
 	, MethodCall
 	, methodCall
@@ -33,7 +33,7 @@ module DBus
 	, methodCallAutoStart
 	, methodCallReplyExpected
 	, methodCallBody
-	
+
 	-- ** Method returns
 	, MethodReturn
 	, methodReturn
@@ -41,7 +41,7 @@ module DBus
 	, methodReturnSender
 	, methodReturnDestination
 	, methodReturnBody
-	
+
 	-- ** Method errors
 	, MethodError
 	, methodError
@@ -51,7 +51,7 @@ module DBus
 	, methodErrorDestination
 	, methodErrorBody
 	, methodErrorMessage
-	
+
 	-- ** Signals
 	, Signal
 	, signal
@@ -61,22 +61,22 @@ module DBus
 	, signalSender
 	, signalDestination
 	, signalBody
-	
+
 	-- ** Received messages
 	, ReceivedMessage(ReceivedMethodCall, ReceivedMethodReturn, ReceivedMethodError, ReceivedSignal)
 	, receivedMessageSerial
 	, receivedMessageSender
 	, receivedMessageBody
-	
+
 	-- * Variants
 	, Variant
 	, IsVariant(..)
 	, variantType
-	
+
 	, IsAtom
 	, IsValue
 	, typeOf
-	
+
 	-- * Signatures
 	, Signature
 	, Type(..)
@@ -85,53 +85,53 @@ module DBus
 	, signatureTypes
 	, formatSignature
 	, parseSignature
-	
+
 	-- * Object paths
 	, ObjectPath
 	, objectPath_
 	, formatObjectPath
 	, parseObjectPath
-	
+
 	-- * Names
-	
+
 	-- ** Interface names
 	, InterfaceName
 	, interfaceName_
 	, formatInterfaceName
 	, parseInterfaceName
-	
+
 	-- ** Member names
 	, MemberName
 	, memberName_
 	, formatMemberName
 	, parseMemberName
-	
+
 	-- ** Error names
 	, ErrorName
 	, errorName_
 	, formatErrorName
 	, parseErrorName
-	
+
 	-- ** Bus names
 	, BusName
 	, busName_
 	, formatBusName
 	, parseBusName
-	
+
 	-- * Non-native containers
-	
+
 	-- ** Structures
 	, Structure
 	, structureItems
-	
+
 	-- ** Arrays
 	, Array
 	, arrayItems
-	
+
 	-- ** Dictionaries
 	, Dictionary
 	, dictionaryItems
-	
+
 	-- * Addresses
 	, Address
 	, addressMethod
@@ -143,27 +143,29 @@ module DBus
 	, parseAddresses
 	, getSystemAddress
 	, getSessionAddress
+	, getSessionAddresses
 	, getStarterAddress
-	
+	, getUserAddress
+
 	-- * Message marshaling
 	, Endianness (..)
-	
+
 	-- ** Marshal
 	, marshal
 	, MarshalError
 	, marshalErrorMessage
-	
+
 	-- ** Unmarshal
 	, unmarshal
 	, UnmarshalError
 	, unmarshalErrorMessage
-	
+
 	-- ** Message serials
 	, Serial
 	, serialValue
 	, firstSerial
 	, nextSerial
-	
+
 	-- * D-Bus UUIDs
 	, UUID
 	, formatUUID

@@ -56,19 +56,19 @@ module DBus.Client
 	(
 	-- * Clients
 	  Client
-	
+
 	-- * Connecting to a bus
 	, connect
 	, connectSystem
 	, connectSession
 	, connectStarter
 	, disconnect
-	
+
 	-- * Sending method calls
 	, call
 	, call_
 	, callNoReply
-	
+
 	-- * Receiving method calls
 	, export
 	, unexport
@@ -78,18 +78,18 @@ module DBus.Client
 	, replyReturn
 	, replyError
 	, throwError
-	
+
 	-- ** Automatic method signatures
 	, AutoMethod
 	, autoMethod
-	
+
 	-- * Signals
 	, SignalHandler
 	, addMatch
 	, removeMatch
 	, emit
 	, listen
-	
+
 	-- ** Match rules
 	, MatchRule
 	, formatMatchRule
@@ -99,25 +99,25 @@ module DBus.Client
 	, matchPath
 	, matchInterface
 	, matchMember
-	
+
 	-- * Name reservation
 	, requestName
 	, releaseName
-	
+
 	, RequestNameFlag
 	, nameAllowReplacement
 	, nameReplaceExisting
 	, nameDoNotQueue
-	
+
 	, RequestNameReply(NamePrimaryOwner, NameInQueue, NameExists, NameAlreadyOwner)
 	, ReleaseNameReply(NameReleased, NameNonExistent, NameNotOwner)
-	
+
 	-- * Client errors
 	, ClientError
 	, clientError
 	, clientErrorMessage
 	, clientErrorFatal
-	
+
 	-- * Advanced connection options
 	, ClientOptions
 	, clientSocketOptions
@@ -127,7 +127,7 @@ module DBus.Client
 	) where
 
 import           Control.Concurrent
-import           Control.Exception (SomeException, throwIO)
+import           Control.Exception (SomeException, throwIO, catch)
 import qualified Control.Exception
 import           Control.Monad (forever, forM_, when)
 import           Data.Bits ((.|.))
@@ -171,7 +171,7 @@ data ClientOptions t = ClientOptions
 	-- | Options for the underlying socket, for advanced use cases. See
 	-- the "DBus.Socket" module.
 	  clientSocketOptions :: DBus.Socket.SocketOptions t
-	
+
 	-- | A function to run the client thread. The provided IO computation
 	-- should be called repeatedly; each time it is called, it will process
 	-- one incoming message.
@@ -225,16 +225,26 @@ connectSystem = do
 		Just addr -> connect addr
 
 -- | Connect to the bus specified in the environment variable
--- @DBUS_SESSION_BUS_ADDRESS@, which must be set.
+-- @DBUS_SESSION_BUS_ADDRESS@, if it is set and valid, otherwise to
+-- the user bus (@$XDG_RUNTIME_DIR/bus@) if it exists.
 --
--- Throws a 'ClientError' if @DBUS_SESSION_BUS_ADDRESS@ is unset, contains an
--- invalid address, or if connecting to the bus failed.
+-- Throws a 'ClientError' if @DBUS_SESSION_BUS_ADDRESS@ contains no
+-- valid address, or if connecting to the bus failed.
 connectSession :: IO Client
-connectSession = do
-	env <- getSessionAddress
-	case env of
-		Nothing -> throwIO (clientError "connectSession: DBUS_SESSION_BUS_ADDRESS is missing or invalid.")
-		Just addr -> connect addr
+connectSession = getSessionAddresses >>= connectAddresses
+
+-- | Attempts to connect to the given addresses in order, returning a
+-- 'Client' for the first successful connection.
+--
+-- Throws a 'ClientError' if none of the addresses could be connected
+-- to.
+connectAddresses :: [Address] -> IO Client
+connectAddresses = tryConnect missing
+	where
+		tryConnect :: ClientError -> [Address] -> IO Client
+		tryConnect e [] = throwIO e
+		tryConnect _ (a:as) = catch (connect a) (\e -> tryConnect e as)
+		missing = clientError "connectSession: DBUS_SESSION_BUS_ADDRESS is missing or invalid."
 
 -- | Connect to the bus specified in the environment variable
 -- @DBUS_STARTER_ADDRESS@, which must be set.
@@ -261,18 +271,18 @@ connect = connectWith defaultClientOptions
 connectWith :: TransportOpen t => ClientOptions t -> Address -> IO Client
 connectWith opts addr = do
 	sock <- DBus.Socket.openWith (clientSocketOptions opts) addr
-	
+
 	pendingCalls <- newIORef Data.Map.empty
 	signalHandlers <- newIORef Data.Map.empty
 	objects <- newIORef Data.Map.empty
-	
+
 	let threadRunner = clientThreadRunner opts
-	
+
 	clientMVar <- newEmptyMVar
 	threadID <- forkIO $ do
 		client <- readMVar clientMVar
 		threadRunner (mainLoop client)
-	
+
 	let client = Client
 		{ clientSocket = sock
 		, clientPendingCalls = pendingCalls
@@ -281,13 +291,13 @@ connectWith opts addr = do
 		, clientThreadID = threadID
 		}
 	putMVar clientMVar client
-	
+
 	export client "/" [introspectRoot client]
-	
+
 	callNoReply client (methodCall dbusPath dbusInterface "Hello")
 		{ methodCallDestination = Just dbusName
 		}
-	
+
 	return client
 
 -- | Default client options. Uses the built-in Socket-based transport, which
@@ -309,23 +319,23 @@ disconnect' client = do
 	pendingCalls <- atomicModifyIORef (clientPendingCalls client) (\p -> (Data.Map.empty, p))
 	forM_ (Data.Map.toList pendingCalls) $ \(k, v) -> do
 		putMVar v (Left (methodError k errorDisconnected))
-	
+
 	atomicWriteIORef (clientSignalHandlers client) Data.Map.empty
 	atomicWriteIORef (clientObjects client) Data.Map.empty
-	
+
 	DBus.Socket.close (clientSocket client)
 
 mainLoop :: Client -> IO ()
 mainLoop client = do
 	let sock = clientSocket client
-	
+
 	received <- Control.Exception.try (DBus.Socket.receive sock)
 	msg <- case received of
 		Left err -> do
 			disconnect' client
 			throwIO (clientError (DBus.Socket.socketErrorMessage err))
 		Right msg -> return msg
-	
+
 	dispatch client msg
 
 dispatch :: Client -> ReceivedMessage -> IO ()
@@ -347,7 +357,7 @@ dispatch client = go where
 				(\_ -> return ())
 		return ()
 	go _ = return ()
-	
+
 	dispatchReply serial result = do
 		pending <- atomicModifyIORef
 			(clientPendingCalls client)
@@ -386,19 +396,19 @@ nameDoNotQueue = DoNotQueue
 data RequestNameReply
 	-- | This client is now the primary owner of the requested name.
 	= NamePrimaryOwner
-	
+
 	-- | The name was already reserved by another client, and replacement
 	-- was either not attempted or not successful.
 	| NameInQueue
-	
+
 	-- | The name was already reserved by another client, 'DoNotQueue'
 	-- was set, and replacement was either not attempted or not
 	-- successful.
 	| NameExists
-	
+
 	-- | This client is already the primary owner of the requested name.
 	| NameAlreadyOwner
-	
+
 	-- | Not exported; exists to generate a compiler warning if users
 	-- case on the reply and forget to include a default case.
 	| UnknownRequestNameReply Word32
@@ -407,13 +417,13 @@ data RequestNameReply
 data ReleaseNameReply
 	-- | This client has released the provided name.
 	= NameReleased
-	
+
 	-- | The provided name is not assigned to any client on the bus.
 	| NameNonExistent
-	
+
 	-- | The provided name is not assigned to this client.
 	| NameNotOwner
-	
+
 	-- | Not exported; exists to generate a compiler warning if users
 	-- case on the reply and forget to include a default case.
 	| UnknownReleaseNameReply Word32
@@ -520,7 +530,7 @@ call client msg = do
 	mvar <- newEmptyMVar
 	let ref = clientPendingCalls client
 	serial <- send_ client safeMsg (\serial -> atomicModifyIORef ref (\p -> (Data.Map.insert serial mvar p, serial)))
-	
+
 	-- At this point, we wait for the reply to arrive. The user may cancel
 	-- a pending call by sending this thread an exception via something
 	-- like 'timeout'; in that case, we want to clean up the pending call.
@@ -571,11 +581,11 @@ addMatch client rule io = do
 	let formatted = case formatMatchRule rule of
 		"" -> "type='signal'"
 		x -> "type='signal'," ++ x
-	
+
 	handlerId <- newUnique
 	registered <- newIORef True
 	let handler = SignalHandler handlerId formatted registered (\msg -> when (checkMatchRule rule msg) (io msg))
-	
+
 	atomicModifyIORef (clientSignalHandlers client) (\hs -> (Data.Map.insert handlerId handler hs, ()))
 	_ <- call_ client (methodCall dbusPath dbusInterface "AddMatch")
 		{ methodCallDestination = Just dbusName
@@ -629,16 +639,16 @@ data MatchRule = MatchRule
 	-- The exception is for signals sent by the bus itself, which always
 	-- have a sender of @\"org.freedesktop.DBus\"@.
 	  matchSender :: Maybe BusName
-	
+
 	-- | If set, only receives signals sent to the given bus name.
 	, matchDestination :: Maybe BusName
-	
+
 	-- | If set, only receives signals sent with the given path.
 	, matchPath  :: Maybe ObjectPath
-	
+
 	-- | If set, only receives signals sent with the given interface name.
 	, matchInterface :: Maybe InterfaceName
-	
+
 	-- | If set, only receives signals sent with the given member name.
 	, matchMember :: Maybe MemberName
 	}
@@ -656,7 +666,7 @@ formatMatchRule rule = intercalate "," predicates where
 		, f "interface" matchInterface formatInterfaceName
 		, f "member" matchMember formatMemberName
 		]
-	
+
 	f :: String -> (MatchRule -> Maybe a) -> (a -> String) -> Maybe String
 	f key get text = do
 		val <- fmap text (get rule)
@@ -714,7 +724,7 @@ method iface name inSig outSig io = Method iface name inSig outSig
 			[toVariant (show (exc :: SomeException))])))
 
 -- | Export the given functions under the given 'ObjectPath' and
--- 'InterfaceName'. 
+-- 'InterfaceName'.
 --
 -- Use 'autoMethod' to construct a 'Method' from a function that accepts and
 -- returns simple types.
@@ -737,12 +747,12 @@ method iface name inSig outSig io = Method iface name inSig outSig
 export :: Client -> ObjectPath -> [Method] -> IO ()
 export client path methods = atomicModifyIORef (clientObjects client) addObject where
 	addObject objs = (Data.Map.insert path info objs, ())
-	
+
 	info = foldl' addMethod Data.Map.empty (defaultIntrospect : methods)
 	addMethod m (Method iface name inSig outSig cb) = Data.Map.insertWith'
 		Data.Map.union iface
 		(Data.Map.fromList [(name, MethodInfo inSig outSig (wrapCB cb))]) m
-	
+
 	wrapCB cb (ReceivedMethodCall serial msg) = do
 		reply <- cb msg
 		let sender = methodCallSender msg
@@ -756,7 +766,7 @@ export client path methods = atomicModifyIORef (clientObjects client) addObject 
 				, methodErrorBody = vs
 				} (\_ -> return ())
 	wrapCB _ _ = return ()
-	
+
 	defaultIntrospect = methodIntrospect $ do
 		objects <- readIORef (clientObjects client)
 		let Just obj = Data.Map.lookup path objects
@@ -818,21 +828,21 @@ methodIntrospect get = method interfaceIntrospectable "Introspect" "" "s" $
 introspect :: ObjectPath -> ObjectInfo -> I.Object
 introspect path obj = (I.object path) { I.objectInterfaces = interfaces } where
 	interfaces = map introspectIface (Data.Map.toList obj)
-	
+
 	introspectIface (name, iface) = (I.interface name)
 		{ I.interfaceMethods = concatMap introspectMethod (Data.Map.toList iface)
 		}
-	
+
 	args inSig outSig =
 		map (introspectArg I.directionIn) (signatureTypes inSig) ++
 		map (introspectArg I.directionOut) (signatureTypes outSig)
-	
+
 	introspectMethod (name, MethodInfo inSig outSig _) =
 		[ (I.method name)
 			{ I.methodArgs = args inSig outSig
 			}
 		]
-	
+
 	introspectArg dir t = I.methodArg "" t dir
 
 -- | Used to automatically generate method signatures for introspection
@@ -854,7 +864,7 @@ class AutoMethod a where
 
 instance AutoMethod (IO ()) where
 	funTypes _ = ([], [])
-	
+
 	apply io [] = Just (io >> return [])
 	apply _ _ = Nothing
 
@@ -864,10 +874,10 @@ instance IsValue a => AutoMethod (IO a) where
 			(_, t) -> case t of
 				TypeStructure ts -> ts
 				_ -> [t])
-		
+
 		ioT :: IsValue a => IO a -> a -> (a, Type)
 		ioT _ a = (a, typeOf a)
-	
+
 	apply io [] = Just (do
 		var <- fmap toVariant io
 		case fromVariant var of
@@ -880,10 +890,10 @@ instance (IsValue a, AutoMethod fn) => AutoMethod (a -> fn) where
 		cased = case valueT undefined of
 			(a, t) -> case funTypes (fn a) of
 				(ts, ts') -> (t : ts, ts')
-		
+
 		valueT :: IsValue a => a -> (a, Type)
 		valueT a = (a, typeOf a)
-	
+
 	apply _ [] = Nothing
 	apply fn (v:vs) = case fromVariant v of
 		Just v' -> apply (fn v') vs
@@ -907,7 +917,7 @@ autoMethod iface name fun = DBus.Client.method iface name inSig outSig io where
 	io msg = case apply fun (methodCallBody msg) of
 		Nothing -> return (ReplyError errorInvalidParameters [])
 		Just io' -> fmap ReplyReturn io'
-	
+
 	invalid label = error (concat
 		[ "Method "
 		, formatInterfaceName iface

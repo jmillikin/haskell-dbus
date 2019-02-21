@@ -17,6 +17,7 @@ module DBus.Address where
 import qualified Control.Exception
 import           Data.Char (digitToInt, ord, chr)
 import           Data.List (intercalate)
+import           Data.Maybe (listToMaybe)
 import qualified Data.Map
 import           Data.Map (Map)
 import qualified System.Environment
@@ -151,7 +152,7 @@ getSystemAddress = do
 getSessionAddress :: IO (Maybe Address)
 getSessionAddress = do
 	env <- getenv "DBUS_SESSION_BUS_ADDRESS"
-	return (env >>= parseAddress)
+	return $ maybe Nothing listToMaybe (env >>= parseAddresses)
 
 -- | Returns the address in the environment variable
 -- @DBUS_STARTER_ADDRESS@, which must be set.
